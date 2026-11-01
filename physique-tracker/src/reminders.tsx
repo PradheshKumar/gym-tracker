@@ -6,6 +6,7 @@ import { useDayTargets } from './hooks-food';
 import { usePlan, useToday } from './hooks';
 import { DEFAULT_REMINDERS, dueReminders, notYetNotified, type Due, type ReminderConfig } from './lib/reminders';
 import { planFor } from './lib/planner';
+import { pushActiveHere } from './push';
 
 export const useReminderConfig = () =>
   useLiveQuery(async () => ({ ...DEFAULT_REMINDERS, ...(((await db.kv.get('reminders'))?.value as Partial<ReminderConfig>) ?? {}) }));
@@ -68,12 +69,30 @@ export function useDueReminders(): Due[] | undefined {
 
 const SENT = 'reminders.sent';
 
-/** Shows each due reminder once a day as a system notification, if this device allowed notifications. */
+/**
+ * Shows each due reminder once a day as a system notification, if this device allowed notifications.
+ * Also keeps a small summary of photo/video dates in synced storage: media never leave the device,
+ * so the push function needs this to know when photo day is due.
+ */
 export function ReminderNotifier() {
   const due = useDueReminders();
   const today = useToday();
+  const mediaSummary = useLiveQuery(async () => {
+    const media = await db.media.filter((m) => !!m.blob).toArray();
+    const last = (type: 'photo' | 'video') =>
+      media.filter((m) => m.type === type).reduce<string | undefined>((d, m) => (!d || m.date > d ? m.date : d), undefined);
+    return { lastPhoto: last('photo'), lastVideo: last('video') };
+  });
   useEffect(() => {
-    if (!due?.length || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (!mediaSummary) return;
+    db.kv.get('mediaSummary').then((row) => {
+      const cur = row?.value as { lastPhoto?: string; lastVideo?: string } | undefined;
+      if (cur?.lastPhoto !== mediaSummary.lastPhoto || cur?.lastVideo !== mediaSummary.lastVideo) db.kv.put({ key: 'mediaSummary', value: mediaSummary });
+    });
+  }, [mediaSummary]);
+  useEffect(() => {
+    // With background push on, the server sends these; avoid double alerts.
+    if (!due?.length || pushActiveHere() || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     let sent: Record<string, string> = {};
     try {
       sent = JSON.parse(localStorage.getItem(SENT) ?? '{}');

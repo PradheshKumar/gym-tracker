@@ -5,3 +5,4 @@ dist/
 .env.local
 .env
 .claude/
+.secrets/

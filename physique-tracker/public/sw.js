@@ -1,5 +1,5 @@
 // Offline-first service worker: precache the shell, cache-first for same-origin GETs.
-const CACHE = 'physique-v2';
+const CACHE = 'physique-v3';
 // Resolve paths against the worker's scope so the app works under a sub-path (e.g. GitHub Pages).
 const SHELL = new URL('index.html', self.registration.scope).href;
 self.addEventListener('install', (e) => {
@@ -51,6 +51,24 @@ self.addEventListener('notificationclick', (e) => {
       const win = list.find((c) => c.url.startsWith(self.registration.scope));
       if (win) return win.navigate(url).then((c) => c && c.focus());
       return self.clients.openWindow(url);
+    }),
+  );
+});
+
+// Background reminders pushed by the Supabase send-reminders function.
+self.addEventListener('push', (e) => {
+  let d = {};
+  try {
+    d = e.data ? e.data.json() : {};
+  } catch {
+    d = { body: e.data && e.data.text() };
+  }
+  e.waitUntil(
+    self.registration.showNotification(d.title || 'Gym Tracker', {
+      body: d.body,
+      tag: d.tag,
+      icon: new URL('icon.svg', self.registration.scope).href,
+      data: { route: d.route || 'today' },
     }),
   );
 });

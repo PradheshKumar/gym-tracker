@@ -1,6 +1,10 @@
 // Reminder rules. Pure: given the config and what has been logged, which reminders are due now.
-import { diffDays } from './dates';
-import type { DateKey } from './types';
+// No imports on purpose: this exact file is also bundled into the Supabase push function
+// (supabase/functions/send-reminders), so the app and the server agree on what is due.
+
+type DateKey = string; // YYYY-MM-DD
+
+const diffDays = (a: DateKey, b: DateKey) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
 
 export interface ReminderConfig {
   enabled: boolean;

@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { checkPin, clearPin, lockEnabled, lockTimeoutMin, setLockTimeoutMin, setPin } from '../lock';
 import type { ReminderConfig } from '../lib/reminders';
+import { disablePush, enablePush, pushSupported, pushSubscribed } from '../push';
 import { saveReminderConfig, useReminderConfig } from '../reminders';
+import { useSyncState } from '../sync/cloud';
 import { Card, Field, NumInput, useToast } from './ui';
 
 type TimedKey = 'weighIn' | 'checkIn' | 'workout' | 'food';
@@ -60,6 +62,7 @@ export function RemindersCard() {
         </div>
       ))}
       <div className="hr" />
+      <BackgroundPush />
       {perm === 'granted' ? (
         <p className="fineprint" style={{ margin: 0 }}>
           Phone notifications are on for this device.
@@ -79,7 +82,7 @@ export function RemindersCard() {
         </button>
       )}
       <p className="fineprint">
-        Due reminders always show on the Today screen. Phone notifications fire while the app is open or recently backgrounded; Android pauses web apps that have been closed for a while, so a fully closed app may not notify until you open it.
+        Due reminders always show on the Today screen. Background reminders come from your account every 15 minutes and arrive even when the app is closed; without them, phone notifications only fire while the app is open or recently used.
       </p>
     </Card>
   );
@@ -156,5 +159,50 @@ export function AppLockCard() {
         </div>
       )}
     </Card>
+  );
+}
+
+function BackgroundPush() {
+  const sync = useSyncState();
+  const toast = useToast();
+  const [on, setOn] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    pushSubscribed().then(setOn);
+  }, []);
+  if (!pushSupported()) return null;
+  const signedIn = sync.status !== 'signed-out' && sync.status !== 'off';
+  return (
+    <div className="stack" style={{ marginBottom: 10 }}>
+      <div className="row between">
+        <strong>Background reminders</strong>
+        <span className={`pill ${on ? 'good' : ''}`}>{on === null ? '…' : on ? 'On for this device' : 'Off'}</span>
+      </div>
+      {!signedIn && <small className="muted">Sign in to cloud sync first (top of Settings).</small>}
+      <button
+        className={`btn block ${on ? '' : 'primary'}`}
+        disabled={busy || !signedIn || on === null}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            if (on) {
+              await disablePush();
+              setOn(false);
+              toast('Background reminders off');
+            } else {
+              await enablePush();
+              setOn(true);
+              toast('Background reminders on');
+            }
+          } catch (e) {
+            toast((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {on ? 'Turn off background reminders' : 'Turn on background reminders'}
+      </button>
+    </div>
   );
 }

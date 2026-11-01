@@ -125,3 +125,36 @@ select user_id,
        (data ->> 'f')::numeric            as fat_g
 from public.records
 where tbl = 'foodlog' and not deleted;
+
+-- ---------- Push reminders ----------
+
+-- One row per device that allowed background notifications.
+create table if not exists public.push_subscriptions (
+  endpoint   text primary key,
+  user_id    uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  p256dh     text not null,
+  auth       text not null,
+  tz         text not null default 'Asia/Kolkata',
+  created_at timestamptz not null default now()
+);
+
+alter table public.push_subscriptions enable row level security;
+
+drop policy if exists "own subscriptions" on public.push_subscriptions;
+create policy "own subscriptions" on public.push_subscriptions
+  for all
+  to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+-- What the send-reminders function already sent today (one push per reminder per day).
+-- No policies: only the function (service role) reads and writes it.
+create table if not exists public.push_log (
+  user_id  uuid not null references auth.users (id) on delete cascade,
+  day      date not null,
+  reminder text not null,
+  sent_at  timestamptz not null default now(),
+  primary key (user_id, day, reminder)
+);
+
+alter table public.push_log enable row level security;
