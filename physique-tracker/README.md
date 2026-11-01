@@ -1,0 +1,60 @@
+# Physique Tracker
+
+Mobile-first, offline-first PWA for the Nov 2026 – Oct 2027 physique plan. React 18 + TypeScript + Vite, Dexie (IndexedDB), no backend. All data, photos and videos stay on the device.
+
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm test           # formula + carry-over unit tests (vitest)
+npm run build      # typecheck + production build in dist/
+```
+
+## Cloud database (Supabase)
+
+The app is offline-first: the on-device IndexedDB is the working copy and syncs to a Supabase Postgres table when you are signed in and online (on every change, on reconnect and every minute). Photos and videos never leave the device.
+
+- Schema, row-level security and typed SQL views: [`../supabase/schema.sql`](../supabase/schema.sql)
+- One `records` row per local record; conflicts resolve last-write-wins on the client timestamp, enforced by a trigger. `rev` (a server sequence) is the pull cursor.
+- Sync engine: `src/sync/engine.ts` (tested in `engine.test.ts` with a fake server); Supabase wiring and auth: `src/sync/cloud.ts`.
+- Data from the first version of the app (numeric ids) is migrated automatically on first load.
+
+Setup:
+
+1. Create a project at supabase.com.
+2. SQL editor → paste and run `supabase/schema.sql`.
+3. Authentication → URL configuration → Site URL `https://pradheshkumar.github.io/gym-tracker/`.
+4. Project settings → API: copy the project URL and the `anon` public key into GitHub repo variables `SUPABASE_URL` and `SUPABASE_ANON_KEY` (Settings → Secrets and variables → Actions → Variables), and into `.env.local` for local dev (see `.env.example`).
+5. Re-run the deploy workflow, open the app, Settings → Cloud sync → create an account.
+
+Without these variables the app runs exactly as before, on-device only.
+
+Install on Android: serve `dist/` over HTTPS (or localhost), open it in Chrome, then use **Add to Home screen**. The service worker caches the app so it works offline in the gym.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `src/lib/formulas.ts` | Navy BF, ACSM treadmill kcal, trend weight, e1RM, adaptive TDEE, double progression |
+| `src/lib/planner.ts` | Missed days, carry-over, rescue session, recovery guard, weekly coverage, treadmill make-up |
+| `src/lib/rules.ts` | Rate-of-loss, strength-drop and fatigue rules (each returns its "why") |
+| `src/data/seed.ts` | Plan, exercises, phases, baseline, foods, goals, default settings |
+| `src/db.ts` | Dexie schema, change-tracking hooks, seeding, legacy migration, JSON/CSV export and restore |
+| `src/sync/*` | Supabase sync engine, outbox, account state |
+| `src/screens/*` | Today, Logger, Week, Body, Media, Food, Insights, Coach, Plan editor, Exercise library, Settings |
+
+## Features
+
+- **Training:** Today screen with day switcher; carry-over, rescue and return-to-training; deload weeks (half sets, ~65% loads); workout logger with previous values, RIR, warm-ups, rest timer, wake lock, swaps, double progression and PR detection; plan editor and exercise library.
+- **Cardio and steps:** treadmill net kcal (ACSM), presets, weekly make-up; manual daily steps.
+- **Body:** weigh-ins with trend weight, measurements with Navy body fat, goals, progress photos/videos with ghost camera and comparison.
+- **Food:** log with targets, saved foods and meal templates, water, budget range; **plan ahead** for any date by meal slot, copy a day's plan to a date range (by weekday), tick planned items as eaten; high-carb days and diet breaks adjust targets.
+- **Coaching:** rate-of-loss, stall (3-week flat trend), measured-expenditure suggestions in 100-150 kcal steps, strength-drop and readiness-based deload suggestions; every suggestion shows its reason and can be accepted or declined.
+- **Insights and reports:** lift charts, PR board, sets per muscle vs landmarks, muscle heatmap, push/pull and upper/lower balance, adherence; weekly/monthly reports and Year in Review with wins and badges (save as PDF).
+- **Reminders and privacy:** in-app due list plus phone notifications while the app is running; device-only PIN lock; first-run setup keeps personal stats out of the code.
+
+## Notes
+
+- Calorie, burn and body-fat numbers are estimates from standard formulas; weight trend and waist are the main signals.
+- Imported media are dated from the file's last-modified time (browsers do not expose the created date).
+- Phone notifications only fire while Android keeps the web app alive; the Today screen always lists what is due.
+- Android/Chrome is the target platform.
