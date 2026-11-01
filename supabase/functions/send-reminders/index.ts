@@ -109,7 +109,8 @@ const SUBJECT = 'https://pradheshkumar.github.io/gym-tracker/';
 const db = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!, {
   auth: { persistSession: false },
 });
-webpush.setVapidDetails(SUBJECT, VAPID_PUBLIC_KEY, Deno.env.get('VAPID_PRIVATE_KEY')!);
+const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY');
+if (VAPID_PRIVATE_KEY) webpush.setVapidDetails(SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 interface Sub {
   endpoint: string;
@@ -176,6 +177,7 @@ async function userState(uid: string, tz: string) {
 }
 
 Deno.serve(async () => {
+  if (!VAPID_PRIVATE_KEY) return new Response(JSON.stringify({ error: 'Secret VAPID_PRIVATE_KEY is not set' }), { status: 500 });
   const { data, error } = await db.from('push_subscriptions').select('*');
   if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 });
   const byUser = new Map<string, Sub[]>();
