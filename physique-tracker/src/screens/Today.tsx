@@ -547,8 +547,14 @@ function StepsRow({ date, weightKg }: { date: DateKey; weightKg: number }) {
 
 /** Due reminders that have no card of their own on this screen. */
 function DueCard({ go }: { go: (r: string) => void }) {
+  const today = useToday();
   const due = useDueReminders()?.filter((d) => !['weigh-in', 'check-in', 'workout'].includes(d.id));
   if (!due?.length) return null;
+  async function tick(id: string) {
+    const r = await db.customReminders.get(id.slice(7));
+    if (!r) return;
+    await db.customReminders.update(r.id!, r.repeat === 'once' ? { done: true } : { lastDone: today });
+  }
   return (
     <div className="banner info">
       <strong>Due</strong>
@@ -559,7 +565,20 @@ function DueCard({ go }: { go: (r: string) => void }) {
               <div>{d.title}</div>
               <small>{d.body}</small>
             </div>
-            <span className="muted">›</span>
+            {d.id.startsWith('custom-') ? (
+              <button
+                className="btn small"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tick(d.id);
+                }}
+                aria-label={`Mark ${d.title} done`}
+              >
+                ✓
+              </button>
+            ) : (
+              <span className="muted">›</span>
+            )}
           </li>
         ))}
       </ul>

@@ -7,7 +7,7 @@ import { useSettings } from '../hooks';
 import { addDays, fmtDate, isoWeekday, WEEKDAY_SHORT } from '../lib/dates';
 import { datesBetween, sumFood } from '../lib/nutrition';
 import { MEAL_SLOTS, type DateKey, type Food, type FoodPlanItem, type MealSlot } from '../lib/types';
-import { FoodPicker } from './Food';
+import { EntryEditor, FoodPicker } from './Food';
 
 const scaled = (f: Food, qty: number) => ({
   name: qty === 1 ? f.name : `${f.name} ×${qty}`,
@@ -50,6 +50,8 @@ export function FoodPlan({ today }: { today: DateKey }) {
   const [addSlot, setAddSlot] = useState<MealSlot | null>(null);
   const [quickSlot, setQuickSlot] = useState<MealSlot | null>(null);
   const [copyOpen, setCopyOpen] = useState(false);
+  const [editItem, setEditItem] = useState<FoodPlanItem | null>(null);
+  const [mealServings, setMealServings] = useState<number | ''>('');
 
   if (!items || !foods || !meals || !settings || targets === undefined || !stripTotals) return null;
   const t = sumFood(items);
@@ -57,12 +59,12 @@ export function FoodPlan({ today }: { today: DateKey }) {
   async function addFood(slot: MealSlot, f: Food, qty: number) {
     await db.foodplan.add({ date, slot, ...scaled(f, qty) });
   }
-  async function addMeal(slot: MealSlot, mealId: string) {
+  async function addMeal(slot: MealSlot, mealId: string, servings = 1) {
     const m = meals!.find((x) => x.id === mealId);
     if (!m) return;
     for (const it of m.items) {
       const f = foods!.find((x) => x.id === it.foodId);
-      if (f) await addFood(slot, f, it.qty);
+      if (f) await addFood(slot, f, it.qty * servings);
     }
     toast(`${m.name} planned`);
   }
@@ -118,6 +120,14 @@ export function FoodPlan({ today }: { today: DateKey }) {
         )}
       </Card>
 
+      <div className="row" style={{ marginBottom: 8 }}>
+        <span className="muted">Meal templates add</span>
+        <div style={{ width: 70 }}>
+          <NumInput value={mealServings} step={0.25} min={0} placeholder="×1" onChange={setMealServings} ariaLabel="Meal template servings" />
+        </div>
+        <span className="muted">servings</span>
+      </div>
+
       {MEAL_SLOTS.map((s) => {
         const rows = items.filter((i) => i.slot === s.id);
         const st = sumFood(rows);
@@ -137,7 +147,7 @@ export function FoodPlan({ today }: { today: DateKey }) {
                         ✓
                       </button>
                     )}
-                    <div className="grow">
+                    <div className="grow" onClick={() => setEditItem(r)} role="button" style={{ cursor: 'pointer' }}>
                       <div>{r.name}</div>
                       <small>
                         {r.kcal} kcal · P {r.p} · C {r.c} · F {r.f}
@@ -154,7 +164,7 @@ export function FoodPlan({ today }: { today: DateKey }) {
               <button className="btn small" onClick={() => setAddSlot(s.id)}>
                 + Food
               </button>
-              <select className="txt" style={{ minHeight: 36, maxWidth: 170 }} value="" onChange={(e) => e.target.value && addMeal(s.id, e.target.value)} aria-label={`Add meal template to ${s.label}`}>
+              <select className="txt" style={{ minHeight: 36, maxWidth: 170 }} value="" onChange={(e) => e.target.value && addMeal(s.id, e.target.value, mealServings === '' || mealServings <= 0 ? 1 : mealServings)} aria-label={`Add meal template to ${s.label}`}>
                 <option value="">+ Meal template…</option>
                 {meals.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -190,10 +200,15 @@ export function FoodPlan({ today }: { today: DateKey }) {
             await addFood(addSlot!, f, q);
             toast(`${f.name} planned`);
           }}
-          onNew={() => toast('Add new foods from the Log tab')}
         />
       </Sheet>
       <QuickAdd slot={quickSlot} onClose={() => setQuickSlot(null)} onAdd={(row) => db.foodplan.add({ date, slot: quickSlot!, ...row })} />
+      <EntryEditor
+        entry={editItem}
+        onClose={() => setEditItem(null)}
+        onSave={(patch) => db.foodplan.update(editItem!.id!, patch)}
+        onDelete={() => db.foodplan.delete(editItem!.id!)}
+      />
       <CopySheet open={copyOpen} onClose={() => setCopyOpen(false)} from={date} items={items} today={today} />
     </>
   );

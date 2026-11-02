@@ -91,3 +91,33 @@ export function notYetNotified(due: Due[], sent: Record<string, DateKey>, today:
   return due.filter((d) => sent[d.id] !== today);
 }
 
+
+/** A reminder you write yourself ("order paneer", "soak oats for overnight oats"). */
+export interface CustomReminder {
+  id?: string;
+  text: string;
+  /** HH:MM, local time. */
+  time: string;
+  repeat: 'once' | 'daily';
+  /** For one-off reminders: the day it is for. */
+  date?: DateKey;
+  /** One-off reminder already delivered or ticked off. */
+  done?: boolean;
+  /** Daily reminder ticked off for this day. */
+  lastDone?: DateKey;
+  paused?: boolean;
+}
+
+export const customReminderId = (r: CustomReminder) => `custom-${r.id}`;
+
+/** Custom reminders due now. One-off reminders whose day has passed still fire (late beats never). */
+export function customDue(list: CustomReminder[], today: DateKey, minutes: number): Due[] {
+  return list
+    .filter((r) => !r.paused && !r.done && r.id)
+    .filter((r) =>
+      r.repeat === 'daily'
+        ? r.lastDone !== today && minutes >= toMin(r.time)
+        : !!r.date && (r.date < today || (r.date === today && minutes >= toMin(r.time))),
+    )
+    .map((r) => ({ id: customReminderId(r), title: r.text, body: r.repeat === 'daily' ? `Daily reminder · ${r.time}` : `Reminder · ${r.time}`, route: 'reminders' }));
+}

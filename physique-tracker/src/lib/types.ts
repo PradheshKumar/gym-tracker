@@ -44,6 +44,8 @@ export interface Exercise {
   increment: number;
   cues?: string;
   custom?: boolean;
+  /** Hidden from pickers (kept for logged history). */
+  archived?: boolean;
 }
 
 export interface PlannedExercise {

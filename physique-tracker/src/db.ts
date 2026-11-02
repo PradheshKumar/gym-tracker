@@ -29,6 +29,7 @@ import type {
   WeighIn,
 } from './lib/types';
 import { addTomb, notifyChange } from './sync/outbox';
+import type { CustomReminder } from './lib/reminders';
 
 interface KV {
   key: string;
@@ -58,6 +59,7 @@ export const TABLES = [
   'rules',
   'kv',
   'foodplan',
+  'customReminders',
 ] as const;
 export type TableName = (typeof TABLES)[number];
 
@@ -85,6 +87,7 @@ export const PK: Record<TableName, string> = {
   rules: 'id',
   kv: 'key',
   foodplan: 'id',
+  customReminders: 'id',
 };
 
 /** Photos and videos never leave the device. */
@@ -118,6 +121,7 @@ export class AppDB extends Dexie {
   rules!: Table<RuleEvent, string>;
   kv!: Table<KV, string>;
   foodplan!: Table<FoodPlanItem, string>;
+  customReminders!: Table<CustomReminder, string>;
 
   constructor(name = 'gym-tracker') {
     super(name);
@@ -145,6 +149,7 @@ export class AppDB extends Dexie {
       kv: 'key',
     });
     this.version(2).stores({ foodplan: 'id, date' });
+    this.version(3).stores({ customReminders: 'id' });
     for (const name of TABLES) installHooks(this, name);
   }
 }

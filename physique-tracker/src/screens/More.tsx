@@ -1,6 +1,7 @@
 import { Card } from '../components/ui';
 
 const ITEMS = [
+  { id: 'reminders', label: 'My reminders', sub: 'Type or say a reminder (order paneer, overnight oats…), once or daily' },
   { id: 'reports', label: 'Reports & badges', sub: 'Weekly and monthly reports, Year in Review, wins, badges (save as PDF)' },
   { id: 'plan', label: 'Weekly plan', sub: 'Edit days, exercises, sets, reps, tiers; templates' },
   { id: 'exercises', label: 'Exercise library', sub: 'Custom exercises, target muscles, form cues' },

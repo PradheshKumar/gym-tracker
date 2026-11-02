@@ -82,7 +82,7 @@ export function RemindersCard() {
         </button>
       )}
       <p className="fineprint">
-        Due reminders always show on the Today screen. Background reminders come from your account every 15 minutes and arrive even when the app is closed; without them, phone notifications only fire while the app is open or recently used.
+        Due reminders always show on the Today screen. Background reminders come from your account every 5 minutes and arrive even when the app is closed; without them, phone notifications only fire while the app is open or recently used.
       </p>
     </Card>
   );

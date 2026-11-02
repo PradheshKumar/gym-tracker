@@ -98,10 +98,41 @@ export function notYetNotified(due: Due[], sent: Record<string, DateKey>, today:
   return due.filter((d) => sent[d.id] !== today);
 }
 
+
+/** A reminder you write yourself ("order paneer", "soak oats for overnight oats"). */
+export interface CustomReminder {
+  id?: string;
+  text: string;
+  /** HH:MM, local time. */
+  time: string;
+  repeat: 'once' | 'daily';
+  /** For one-off reminders: the day it is for. */
+  date?: DateKey;
+  /** One-off reminder already delivered or ticked off. */
+  done?: boolean;
+  /** Daily reminder ticked off for this day. */
+  lastDone?: DateKey;
+  paused?: boolean;
+}
+
+export const customReminderId = (r: CustomReminder) => `custom-${r.id}`;
+
+/** Custom reminders due now. One-off reminders whose day has passed still fire (late beats never). */
+export function customDue(list: CustomReminder[], today: DateKey, minutes: number): Due[] {
+  return list
+    .filter((r) => !r.paused && !r.done && r.id)
+    .filter((r) =>
+      r.repeat === 'daily'
+        ? r.lastDone !== today && minutes >= toMin(r.time)
+        : !!r.date && (r.date < today || (r.date === today && minutes >= toMin(r.time))),
+    )
+    .map((r) => ({ id: customReminderId(r), title: r.text, body: r.repeat === 'daily' ? `Daily reminder · ${r.time}` : `Reminder · ${r.time}`, route: 'reminders' }));
+}
+
 // ---- scripts/push-handler.ts ----
 // Supabase Edge Function body (Deno). Combined with src/lib/reminders.ts by
 // scripts/build-push-function.mjs into supabase/functions/send-reminders/index.ts.
-// Runs every 15 minutes (pg_cron): for each user with a push subscription, works out which
+// Runs every 5 minutes (pg_cron): for each user with a push subscription, works out which
 // reminders are due in their time zone and sends each one at most once a day.
 
 const SUBJECT = 'https://pradheshkumar.github.io/gym-tracker/';
@@ -142,7 +173,7 @@ async function userState(uid: string, tz: string) {
   const one = async (tbl: string, id: string) => (await base().eq('tbl', tbl).eq('id', id).maybeSingle()).data?.data as any;
   const any = async (q: any) => ((await q.limit(1)).data ?? []).length > 0;
 
-  const [configRow, media, weigh, check, water, plan, phases, sets, daySkips, food, waist] = await Promise.all([
+  const [configRow, media, weigh, check, water, plan, phases, sets, daySkips, food, waist, customRows] = await Promise.all([
     one('kv', 'reminders'),
     one('kv', 'mediaSummary'),
     one('weighins', today),
@@ -154,6 +185,7 @@ async function userState(uid: string, tz: string) {
     any(base().eq('tbl', 'skips').eq('data->>date', today).is('data->>exerciseId', null)),
     any(base().eq('tbl', 'foodlog').eq('data->>date', today)),
     base().eq('tbl', 'measurements').eq('data->>site', 'waist (navel)').order('data->>date', { ascending: false }).limit(1),
+    base().eq('tbl', 'customReminders'),
   ]);
 
   const allPhases = ((phases.data ?? []) as { data: any }[]).map((r) => r.data).sort((a, b) => a.order - b.order);
@@ -173,7 +205,8 @@ async function userState(uid: string, tz: string) {
     lastPhoto: media?.value?.lastPhoto,
     lastVideo: media?.value?.lastVideo,
   };
-  return { today, due: dueReminders(config, state) };
+  const custom = ((customRows.data ?? []) as { data: CustomReminder }[]).map((r) => r.data);
+  return { today, custom, due: [...customDue(custom, today, minutes), ...dueReminders(config, state)] };
 }
 
 Deno.serve(async () => {
@@ -185,7 +218,7 @@ Deno.serve(async () => {
 
   let sent = 0;
   for (const [uid, subs] of byUser) {
-    const { today, due } = await userState(uid, subs[0].tz || 'Asia/Kolkata');
+    const { today, due, custom } = await userState(uid, subs[0].tz || 'Asia/Kolkata');
     if (!due.length) continue;
     const { data: log } = await db.from('push_log').select('reminder').eq('user_id', uid).eq('day', today);
     const done = new Set((log ?? []).map((r: { reminder: string }) => r.reminder));
@@ -202,6 +235,16 @@ Deno.serve(async () => {
         }
       }
       await db.from('push_log').upsert({ user_id: uid, day: today, reminder: d.id }, { ignoreDuplicates: true });
+      // One-off custom reminders are finished once delivered; the change syncs back to the app.
+      const r = custom.find((x) => customReminderId(x) === d.id);
+      if (r?.repeat === 'once') {
+        await db
+          .from('records')
+          .update({ data: { ...r, done: true }, updated_at: Date.now() })
+          .eq('user_id', uid)
+          .eq('tbl', 'customReminders')
+          .eq('id', r.id!);
+      }
     }
   }
   return new Response(JSON.stringify({ users: byUser.size, sent }), { headers: { 'Content-Type': 'application/json' } });

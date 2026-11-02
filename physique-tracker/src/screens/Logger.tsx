@@ -10,7 +10,7 @@ import { fmtDate } from '../lib/dates';
 import { e1rm, suggestProgression, warmupSets } from '../lib/formulas';
 import { groupOf } from '../lib/planner';
 import type { Exercise, Session, SessionItem, SetLog, SkipReason } from '../lib/types';
-import { ExercisePicker } from './ExerciseLibrary';
+import { ExerciseForm, ExercisePicker } from './ExerciseLibrary';
 import { ReasonSheet } from './Today';
 
 export function Logger({ id, go }: { id: string; go: (r: string) => void }) {
@@ -173,6 +173,7 @@ function ExerciseBlock(props: {
   const toast = useToast();
   const [skipOpen, setSkipOpen] = useState(false);
   const [subOpen, setSubOpen] = useState(false);
+  const [editEx, setEditEx] = useState(false);
   const [extra, setExtra] = useState(0);
   const [warmDrafts, setWarmDrafts] = useState<{ weight: number; reps: number }[]>([]);
   const prev = useLiveQuery(async () => {
@@ -251,6 +252,11 @@ function ExerciseBlock(props: {
           <p className="fineprint">
             {ex?.equipment}. {ex?.cues ?? ''} RIR 1-2 on working sets, 2 s lowering. Rest {Math.round(restFor(ex) / 60 * 10) / 10} min.
           </p>
+          {ex && (
+            <button className="btn small ghost" onClick={() => setEditEx(true)}>
+              ✎ Edit exercise
+            </button>
+          )}
         </details>
       </div>
 
@@ -332,6 +338,7 @@ function ExerciseBlock(props: {
           setSkipOpen(false);
         }}
       />
+      {editEx && ex && <ExerciseForm ex={ex} onClose={() => setEditEx(false)} />}
       <ExercisePicker
         open={subOpen}
         onClose={() => setSubOpen(false)}
@@ -406,11 +413,44 @@ function DoneRow({ s, label }: { s: SetLog; label: string }) {
   );
 }
 
+const REST_TAG = 'rest-timer';
+const fmtSec = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+async function restNotification(title: string, body: string, alert: boolean) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const reg = await navigator.serviceWorker?.getRegistration();
+  if (!reg) return;
+  await reg.showNotification(title, {
+    tag: REST_TAG,
+    body,
+    silent: !alert,
+    renotify: alert,
+    requireInteraction: !alert,
+    icon: `${import.meta.env.BASE_URL}icon.svg`,
+    data: { route: location.hash.replace(/^#\/?/, '') || 'today' },
+    ...(alert ? { vibrate: [300, 120, 300] } : { actions: [{ action: 'rest-add', title: '+15 s' }, { action: 'rest-skip', title: 'Skip rest' }] }),
+  } as unknown as NotificationOptions);
+}
+
+async function clearRestNotification() {
+  const reg = await navigator.serviceWorker?.getRegistration();
+  (await reg?.getNotifications({ tag: REST_TAG }))?.forEach((n) => n.close());
+}
+
+/**
+ * Rest countdown. While the app is in the background it keeps a silent notification updated
+ * (with +15 s / Skip buttons) and alerts when rest is over.
+ */
 function RestTimer({ rest, onChange }: { rest: { endAt: number; total: number }; onChange: (r: { endAt: number; total: number } | null) => void }) {
   const [now, setNow] = useState(Date.now());
+  const [perm, setPerm] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   const fired = useRef(false);
+  const alerted = useRef(false);
+  const lastPost = useRef(0);
   useEffect(() => {
     fired.current = false;
+    alerted.current = false;
+    lastPost.current = 0;
   }, [rest.endAt]);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250);
@@ -422,17 +462,49 @@ function RestTimer({ rest, onChange }: { rest: { endAt: number; total: number };
       fired.current = true;
       navigator.vibrate?.([250, 120, 250]);
       beep();
+      if (document.hidden) {
+        alerted.current = true;
+        restNotification('Rest over: next set', `Rested ${fmtSec(Math.round(rest.total))}. Tap to open the workout.`, true);
+      }
     }
     if (left < -30) onChange(null);
-  }, [left, onChange]);
+  }, [left, onChange, rest.total]);
+  // Live countdown in the notification shade while backgrounded (every ~5 s; Android throttles background timers).
+  useEffect(() => {
+    if (left <= 0 || !document.hidden || Date.now() - lastPost.current < 4500) return;
+    lastPost.current = Date.now();
+    const ready = new Date(rest.endAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+    restNotification(`Rest ${fmtSec(left)}`, `Next set at ${ready}`, false);
+  }, [left, rest.endAt]);
+  useEffect(() => {
+    const onVis = () => document.visibilityState === 'visible' && clearRestNotification();
+    const onMsg = (e: MessageEvent) => {
+      if (e.data?.type !== 'rest') return;
+      if (e.data.action === 'rest-add') onChange({ ...rest, endAt: rest.endAt + 15000 });
+      if (e.data.action === 'rest-skip') onChange(null);
+    };
+    document.addEventListener('visibilitychange', onVis);
+    navigator.serviceWorker?.addEventListener('message', onMsg);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      navigator.serviceWorker?.removeEventListener('message', onMsg);
+    };
+  }, [rest, onChange]);
+  // Leaving the timer clears the countdown notification (a "rest over" alert stays until seen).
+  useEffect(() => () => void (alerted.current || clearRestNotification()), []);
   const abs = Math.abs(left);
   return (
     <div className={`rest ${left <= 0 ? 'over' : ''}`} role="timer" aria-live="off">
       <span>{left <= 0 ? 'Go!' : 'Rest'}</span>
       <b>
         {left < 0 ? '+' : ''}
-        {Math.floor(abs / 60)}:{String(abs % 60).padStart(2, '0')}
+        {fmtSec(abs)}
       </b>
+      {perm === 'default' && (
+        <button onClick={async () => setPerm(await Notification.requestPermission())} aria-label="Show the rest timer in notifications" title="Show the timer outside the app">
+          🔔
+        </button>
+      )}
       <button onClick={() => onChange({ ...rest, endAt: rest.endAt - 15000 })}>−15</button>
       <button onClick={() => onChange({ ...rest, endAt: rest.endAt + 15000 })}>+15</button>
       <button onClick={() => onChange(null)} aria-label="Dismiss timer">

@@ -72,3 +72,41 @@ export function datesBetween(from: DateKey, to: DateKey, weekdays: number[]): Da
   }
   return out;
 }
+
+export interface WeekDayIntake {
+  date: DateKey;
+  target: number;
+  /** Logged kcal, or null when nothing was logged that day. */
+  eaten: number | null;
+}
+
+export interface WeeklyBalance {
+  weekTarget: number;
+  /** Logged minus target over finished days that have a log (unlogged days are ignored). */
+  diffSoFar: number;
+  loggedDays: number;
+  /** Today and the rest of the week, with a suggested intake that evens out the week. */
+  suggestions: { date: DateKey; target: number; suggested: number }[];
+  shiftPerDay: number;
+  capped: boolean;
+}
+
+/**
+ * Spread a calorie surplus/shortfall from earlier in the week over the remaining days,
+ * never shifting any day by more than `maxShift` kcal (big swings hurt training and hunger).
+ */
+export function weeklyBalance(days: WeekDayIntake[], today: DateKey, maxShift = 300): WeeklyBalance {
+  const past = days.filter((d) => d.date < today && d.eaten !== null);
+  const diffSoFar = past.reduce((s, d) => s + (d.eaten! - d.target), 0);
+  const left = days.filter((d) => d.date >= today);
+  const raw = left.length ? -diffSoFar / left.length : 0;
+  const shiftPerDay = Math.round(Math.max(-maxShift, Math.min(maxShift, raw)) / 10) * 10;
+  return {
+    weekTarget: days.reduce((s, d) => s + d.target, 0),
+    diffSoFar,
+    loggedDays: past.length,
+    suggestions: left.map((d) => ({ date: d.date, target: d.target, suggested: d.target + shiftPerDay })),
+    shiftPerDay,
+    capped: Math.abs(raw) > maxShift,
+  };
+}

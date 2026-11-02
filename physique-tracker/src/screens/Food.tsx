@@ -1,5 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Bar, Card, Estimate, Field, NumInput, Ring, Sheet, fmt, useToast } from '../components/ui';
 import { db } from '../db';
 import { usePhases, useSettings, useToday } from '../hooks';
@@ -49,7 +49,8 @@ function FoodLogView({ today }: { today: DateKey }) {
   const planned = useLiveQuery(() => db.foodplan.where('date').equals(date).toArray(), [date]);
   const [quick, setQuick] = useState({ name: '', kcal: '' as number | '', p: '' as number | '', c: '' as number | '', f: '' as number | '' });
   const [pickOpen, setPickOpen] = useState(false);
-  const [newFood, setNewFood] = useState<FoodT | null>(null);
+  const [editEntry, setEditEntry] = useState<FoodLog | null>(null);
+  const [mealServings, setMealServings] = useState<number | ''>('');
 
   if (!phases || !log || !foods || !meals || !week || !settings || !highCarb || !target || !planned) return null;
   const phase = target.phase!;
@@ -79,14 +80,14 @@ function FoodLogView({ today }: { today: DateKey }) {
     });
   }
 
-  async function addMeal(id: string) {
+  async function addMeal(id: string, servings = 1) {
     const m = meals!.find((x) => x.id === id);
     if (!m) return;
     for (const it of m.items) {
       const f = foods!.find((x) => x.id === it.foodId);
-      if (f) await addFood(f, it.qty);
+      if (f) await addFood(f, it.qty * servings);
     }
-    toast(`${m.name} added`);
+    toast(`${m.name}${servings !== 1 ? ` ×${servings}` : ''} added`);
   }
 
   return (
@@ -205,7 +206,10 @@ function FoodLogView({ today }: { today: DateKey }) {
           <button className="btn primary grow" onClick={() => setPickOpen(true)}>
             Saved foods
           </button>
-          <select className="txt grow" value="" onChange={(e) => e.target.value && addMeal(e.target.value)} aria-label="Add meal template">
+          <div style={{ width: 64 }}>
+            <NumInput value={mealServings} step={0.25} min={0} placeholder="×1" onChange={setMealServings} ariaLabel="Meal template servings" />
+          </div>
+          <select className="txt grow" value="" onChange={(e) => e.target.value && addMeal(e.target.value, mealServings === '' || mealServings <= 0 ? 1 : mealServings)} aria-label="Add meal template">
             <option value="">Meal template…</option>
             {meals.map((m) => (
               <option key={m.id} value={m.id}>
@@ -247,10 +251,10 @@ function FoodLogView({ today }: { today: DateKey }) {
           <ul className="list">
             {log.map((r) => (
               <li key={r.id}>
-                <div className="grow">
+                <div className="grow" onClick={() => setEditEntry(r)} role="button" style={{ cursor: 'pointer' }}>
                   <div>{r.name}</div>
                   <small>
-                    P {fmt(r.p)} · C {fmt(r.c)} · F {fmt(r.f)}
+                    P {fmt(r.p)} · C {fmt(r.c)} · F {fmt(r.f)} · tap to edit
                   </small>
                 </div>
                 <strong className="mono">{r.kcal}</strong>
@@ -300,77 +304,221 @@ function FoodLogView({ today }: { today: DateKey }) {
             await addFood(f, q);
             toast(`${f.name} added`);
           }}
-          onNew={() => setNewFood({ name: '', serving: '1 serving', kcal: 0, p: 0, c: 0, f: 0 })}
         />
       </Sheet>
-      <Sheet open={!!newFood} onClose={() => setNewFood(null)} title="New saved food">
-        {newFood && (
-          <>
-            <Field label="Name">
-              <input value={newFood.name} onChange={(e) => setNewFood({ ...newFood, name: e.target.value })} />
-            </Field>
-            <Field label="Serving">
-              <input value={newFood.serving} onChange={(e) => setNewFood({ ...newFood, serving: e.target.value })} />
-            </Field>
-            <div className="grid3" style={{ marginTop: 6 }}>
-              {(['kcal', 'p', 'c', 'f', 'fiber', 'costInr'] as const).map((k) => (
-                <Field key={k} label={k === 'costInr' ? '₹' : k}>
-                  <NumInput value={newFood[k] ?? ''} onChange={(v) => setNewFood({ ...newFood, [k]: v === '' ? undefined : v })} />
-                </Field>
-              ))}
-            </div>
-            <button
-              className="btn primary block"
-              style={{ marginTop: 8 }}
-              disabled={!newFood.name}
-              onClick={async () => {
-                await db.foods.add({ ...newFood, kcal: newFood.kcal || 0 });
-                setNewFood(null);
-              }}
-            >
-              Save food
-            </button>
-          </>
-        )}
-      </Sheet>
+      <EntryEditor
+        entry={editEntry}
+        onClose={() => setEditEntry(null)}
+        onSave={(patch) => db.foodlog.update(editEntry!.id!, patch)}
+        onDelete={() => db.foodlog.delete(editEntry!.id!)}
+      />
     </>
   );
 }
 
-export function FoodPicker({ foods, onAdd, onNew }: { foods: FoodT[]; onAdd: (f: FoodT, qty: number) => void; onNew: () => void }) {
+const BLANK_FOOD: FoodT = { name: '', serving: '1 serving', kcal: 0, p: 0, c: 0, f: 0 };
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Saved foods: search, add with any quantity (e.g. 1.25 servings), create, edit and delete. */
+export function FoodPicker({ foods, onAdd }: { foods: FoodT[]; onAdd: (f: FoodT, qty: number) => void }) {
   const [q, setQ] = useState('');
-  const [qty, setQty] = useState<Record<string, number>>({});
+  const [qty, setQty] = useState<Record<string, number | ''>>({});
+  const [editing, setEditing] = useState<FoodT | null>(null);
   const list = useMemo(() => foods.filter((f) => f.name.toLowerCase().includes(q.toLowerCase())), [foods, q]);
   return (
     <>
       <div className="row">
         <input className="txt" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button className="btn" onClick={onNew}>
+        <button className="btn" onClick={() => setEditing({ ...BLANK_FOOD, name: q })}>
           New
         </button>
       </div>
       <ul className="list">
-        {list.map((f) => (
-          <li key={f.id}>
-            <div className="grow">
-              <div>{f.name}</div>
-              <small>
-                {f.serving} · {f.kcal} kcal · P {f.p}
-              </small>
-            </div>
-            <select value={qty[f.id!] ?? 1} onChange={(e) => setQty({ ...qty, [f.id!]: Number(e.target.value) })} className="txt" style={{ width: 70, minHeight: 36 }} aria-label="Quantity">
-              {[0.5, 1, 1.5, 2, 3, 4].map((n) => (
-                <option key={n} value={n}>
-                  ×{n}
-                </option>
-              ))}
-            </select>
-            <button className="btn small primary" onClick={() => onAdd(f, qty[f.id!] ?? 1)} aria-label={`Add ${f.name}`}>
-              +
-            </button>
-          </li>
-        ))}
+        {list.map((f) => {
+          const n = qty[f.id!];
+          const mult = n === undefined || n === '' ? 1 : n;
+          const ok = mult > 0;
+          return (
+            <li key={f.id}>
+              <div className="grow" style={{ minWidth: 0 }}>
+                <div>{f.name}</div>
+                <small>
+                  {f.serving} · {f.kcal} kcal · P {f.p}
+                  {ok && mult !== 1 && (
+                    <>
+                      {' '}
+                      → <strong>{Math.round(f.kcal * mult)} kcal</strong>
+                    </>
+                  )}
+                </small>
+              </div>
+              <button className="btn small ghost" onClick={() => setEditing(f)} aria-label={`Edit ${f.name}`}>
+                ✎
+              </button>
+              <div style={{ width: 64 }}>
+                <NumInput value={n ?? ''} placeholder="×1" step={0.25} min={0} onChange={(v) => setQty({ ...qty, [f.id!]: v })} ariaLabel={`Servings of ${f.name}`} />
+              </div>
+              <button className="btn small primary" disabled={!ok} onClick={() => ok && onAdd(f, mult)} aria-label={`Add ${f.name}`}>
+                +
+              </button>
+            </li>
+          );
+        })}
       </ul>
+      <p className="fineprint">The servings box takes any number (0.5, 1.25, 2.5…); empty means 1. Tap ✎ to edit or delete a food.</p>
+      <FoodEditor food={editing} onClose={() => setEditing(null)} />
     </>
+  );
+}
+
+function FoodEditor({ food, onClose }: { food: FoodT | null; onClose: () => void }) {
+  const toast = useToast();
+  const [f, setF] = useState<FoodT | null>(food);
+  useEffect(() => setF(food), [food]);
+  return (
+    <Sheet open={!!food} onClose={onClose} title={food?.id ? `Edit ${food.name}` : 'New saved food'}>
+      {f && (
+        <>
+          <Field label="Name">
+            <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          </Field>
+          <Field label="Serving (what 1× means)">
+            <input value={f.serving} onChange={(e) => setF({ ...f, serving: e.target.value })} />
+          </Field>
+          <div className="grid3" style={{ marginTop: 6 }}>
+            {(
+              [
+                ['kcal', 'kcal'],
+                ['p', 'Protein g'],
+                ['c', 'Carbs g'],
+                ['f', 'Fat g'],
+                ['fiber', 'Fiber g'],
+                ['costInr', 'Cost ₹'],
+              ] as const
+            ).map(([k, label]) => (
+              <Field key={k} label={label}>
+                <NumInput value={f[k] ?? ''} step={0.1} onChange={(v) => setF({ ...f, [k]: v === '' ? undefined : v })} />
+              </Field>
+            ))}
+          </div>
+          <button
+            className="btn primary block"
+            style={{ marginTop: 8 }}
+            disabled={!f.name.trim()}
+            onClick={async () => {
+              await db.foods.put({ ...f, name: f.name.trim(), kcal: f.kcal || 0, p: f.p || 0, c: f.c || 0, f: f.f || 0 });
+              toast(f.id ? 'Food updated' : 'Food saved');
+              onClose();
+            }}
+          >
+            {f.id ? 'Save changes' : 'Save food'}
+          </button>
+          {f.id && (
+            <button
+              className="btn danger block"
+              style={{ marginTop: 8 }}
+              onClick={async () => {
+                if (!confirm(`Delete ${f.name}? Entries already logged stay as they are.`)) return;
+                await db.transaction('rw', db.foods, db.meals, async () => {
+                  await db.foods.delete(f.id!);
+                  // Drop it from meal templates too.
+                  for (const m of await db.meals.toArray())
+                    if (m.items.some((i) => i.foodId === f.id)) await db.meals.update(m.id!, { items: m.items.filter((i) => i.foodId !== f.id) });
+                });
+                toast('Food deleted');
+                onClose();
+              }}
+            >
+              Delete food
+            </button>
+          )}
+        </>
+      )}
+    </Sheet>
+  );
+}
+
+export interface EditableEntry {
+  id?: string;
+  name: string;
+  kcal: number;
+  p: number;
+  c: number;
+  f: number;
+  fiber?: number;
+}
+
+/** Edit or delete one logged or planned food entry; "scale" multiplies every number at once. */
+export function EntryEditor({
+  entry,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  entry: EditableEntry | null;
+  onClose: () => void;
+  onSave: (patch: Partial<EditableEntry>) => Promise<unknown>;
+  onDelete: () => Promise<unknown>;
+}) {
+  const [e, setE] = useState<EditableEntry | null>(entry);
+  const [scale, setScale] = useState<number | ''>('');
+  useEffect(() => {
+    setE(entry);
+    setScale('');
+  }, [entry]);
+  return (
+    <Sheet open={!!entry} onClose={onClose} title="Edit entry">
+      {e && (
+        <>
+          <Field label="Name">
+            <input value={e.name} onChange={(x) => setE({ ...e, name: x.target.value })} />
+          </Field>
+          <div className="grid2" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginTop: 6 }}>
+            {(['kcal', 'p', 'c', 'f'] as const).map((k) => (
+              <Field key={k} label={k === 'kcal' ? 'kcal' : `${k.toUpperCase()} g`}>
+                <NumInput value={e[k]} step={0.1} onChange={(v) => setE({ ...e, [k]: v === '' ? 0 : v })} />
+              </Field>
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="muted">Scale all by</span>
+            <div style={{ width: 80 }}>
+              <NumInput value={scale} step={0.25} placeholder="×1" onChange={setScale} ariaLabel="Scale factor" />
+            </div>
+            <button
+              className="btn small"
+              disabled={scale === '' || scale <= 0}
+              onClick={() => {
+                if (scale === '') return;
+                setE({ ...e, kcal: Math.round(e.kcal * scale), p: round1(e.p * scale), c: round1(e.c * scale), f: round1(e.f * scale), fiber: e.fiber ? round1(e.fiber * scale) : e.fiber });
+                setScale('');
+              }}
+            >
+              Apply
+            </button>
+          </div>
+          <button
+            className="btn primary block"
+            style={{ marginTop: 10 }}
+            onClick={async () => {
+              await onSave({ name: e.name, kcal: e.kcal, p: e.p, c: e.c, f: e.f, fiber: e.fiber });
+              onClose();
+            }}
+          >
+            Save
+          </button>
+          <button
+            className="btn danger block"
+            style={{ marginTop: 8 }}
+            onClick={async () => {
+              await onDelete();
+              onClose();
+            }}
+          >
+            Delete entry
+          </button>
+        </>
+      )}
+    </Sheet>
   );
 }

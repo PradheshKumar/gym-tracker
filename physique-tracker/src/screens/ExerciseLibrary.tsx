@@ -20,11 +20,12 @@ export function ExerciseLibrary({ go }: { go: (r: string) => void }) {
   const [q, setQ] = useState('');
   const [group, setGroup] = useState<MuscleGroup | 'all'>('all');
   const [edit, setEdit] = useState<Exercise | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
   if (!exMap || !plan || !counts) return null;
 
   const inPlan = new Set(plan.flatMap((d) => d.exercises.flatMap((e) => [e.exerciseId, ...(e.altIds ?? [])])));
   const list = [...exMap.values()]
-    .filter((e) => (group === 'all' || groupOf(e) === group) && e.name.toLowerCase().includes(q.toLowerCase()))
+    .filter((e) => (showArchived ? e.archived : !e.archived) && (group === 'all' || groupOf(e) === group) && e.name.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
@@ -46,7 +47,12 @@ export function ExerciseLibrary({ go }: { go: (r: string) => void }) {
           </button>
         ))}
       </div>
+      <label className="row" style={{ marginBottom: 8, fontSize: 13 }}>
+        <input type="checkbox" checked={showArchived} onChange={(x) => setShowArchived(x.target.checked)} />
+        Show hidden exercises
+      </label>
       <Card>
+        {list.length === 0 && <p className="muted">{showArchived ? 'No hidden exercises.' : 'No exercises match.'}</p>}
         <ul className="list">
           {list.map((e) => (
             <li key={e.id} onClick={() => setEdit(e)} role="button" style={{ cursor: 'pointer' }}>
@@ -65,11 +71,7 @@ export function ExerciseLibrary({ go }: { go: (r: string) => void }) {
         </ul>
       </Card>
       {edit && (
-        <ExerciseForm
-          ex={edit}
-          onClose={() => setEdit(null)}
-          canDelete={!!edit.custom && !inPlan.has(edit.id) && !counts.get(edit.id) && exMap.has(edit.id)}
-        />
+        <ExerciseForm ex={edit} onClose={() => setEdit(null)} />
       )}
     </>
   );
@@ -83,10 +85,21 @@ function slug(s: string) {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30);
 }
 
-export function ExerciseForm({ ex, onClose, onSaved, canDelete }: { ex: Exercise; onClose: () => void; onSaved?: (id: string) => void; canDelete?: boolean }) {
+/** Create or edit an exercise. Unused custom exercises can be deleted; ones with history can be hidden. */
+export function ExerciseForm({ ex, onClose, onSaved }: { ex: Exercise; onClose: () => void; onSaved?: (id: string) => void }) {
   const toast = useToast();
   const [e, setE] = useState<Exercise>(ex);
   const isNew = !ex.id;
+  const usage = useLiveQuery(
+    async () =>
+      ex.id
+        ? {
+            sets: await db.sets.where('exerciseId').equals(ex.id).count(),
+            inPlan: (await db.plan.toArray()).some((d) => d.exercises.some((pe) => pe.exerciseId === ex.id || pe.altIds?.includes(ex.id))),
+          }
+        : { sets: 0, inPlan: false },
+    [ex.id],
+  );
   const ok = e.name.trim().length > 1 && e.increment > 0;
 
   async function save() {
@@ -146,12 +159,13 @@ export function ExerciseForm({ ex, onClose, onSaved, canDelete }: { ex: Exercise
         <button className="btn primary grow" disabled={!ok} onClick={save}>
           Save
         </button>
-        {canDelete && (
+        {!isNew && usage && !usage.inPlan && e.custom && usage.sets === 0 && (
           <button
             className="btn danger"
             onClick={async () => {
               if (confirm(`Delete ${e.name}?`)) {
                 await db.exercises.delete(e.id);
+                toast('Exercise deleted');
                 onClose();
               }
             }}
@@ -159,9 +173,23 @@ export function ExerciseForm({ ex, onClose, onSaved, canDelete }: { ex: Exercise
             Delete
           </button>
         )}
+        {!isNew && usage && !usage.inPlan && (usage.sets > 0 || !e.custom || ex.archived) && (
+          <button
+            className="btn"
+            onClick={async () => {
+              await db.exercises.update(e.id, { archived: !ex.archived });
+              toast(ex.archived ? 'Exercise restored' : 'Exercise hidden');
+              onClose();
+            }}
+          >
+            {ex.archived ? 'Restore' : 'Hide'}
+          </button>
+        )}
       </div>
-      {!isNew && !e.custom && <p className="fineprint">Built-in exercise: edits are kept, but it cannot be deleted.</p>}
-      {!isNew && e.custom && !canDelete && <p className="fineprint">Used in the plan or in logged sets, so it cannot be deleted.</p>}
+      {!isNew && usage?.inPlan && <p className="fineprint">It is in your weekly plan; remove it from the plan to delete or hide it.</p>}
+      {!isNew && usage && !usage.inPlan && usage.sets > 0 && !ex.archived && (
+        <p className="fineprint">It has {usage.sets} logged set(s), so it can be hidden (history kept) but not deleted.</p>
+      )}
     </Sheet>
   );
 }
@@ -184,14 +212,16 @@ export function ExercisePicker({
 }) {
   const [q, setQ] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Exercise | null>(null);
   const list = useMemo(() => {
-    const all = [...exMap.values()].filter((e) => e.name.toLowerCase().includes(q.toLowerCase()));
+    const all = [...exMap.values()].filter((e) => !e.archived && e.name.toLowerCase().includes(q.toLowerCase()));
     const rank = (e: Exercise) => (preferIds.includes(e.id) ? 0 : group && groupOf(e) === group ? 1 : 2);
     return all.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   }, [exMap, q, preferIds, group]);
   if (creating) {
     return <ExerciseForm ex={{ ...blank(), name: q }} onClose={() => setCreating(false)} onSaved={(id) => onPick(id)} />;
   }
+  if (editing) return <ExerciseForm ex={editing} onClose={() => setEditing(null)} />;
   return (
     <Sheet open={open} onClose={onClose} title="Choose exercise">
       <div className="row">
@@ -210,6 +240,16 @@ export function ExercisePicker({
               </small>
             </div>
             {preferIds.includes(e.id) ? <span className="pill good">plan variant</span> : group && groupOf(e) === group ? <span className="pill">same muscle</span> : null}
+            <button
+              className="btn small ghost"
+              onClick={(x) => {
+                x.stopPropagation();
+                setEditing(e);
+              }}
+              aria-label={`Edit ${e.name}`}
+            >
+              ✎
+            </button>
           </li>
         ))}
       </ul>

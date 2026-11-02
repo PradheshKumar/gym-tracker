@@ -1,5 +1,5 @@
 // Offline-first service worker: precache the shell, cache-first for same-origin GETs.
-const CACHE = 'physique-v3';
+const CACHE = 'physique-v4';
 // Resolve paths against the worker's scope so the app works under a sub-path (e.g. GitHub Pages).
 const SHELL = new URL('index.html', self.registration.scope).href;
 self.addEventListener('install', (e) => {
@@ -44,6 +44,14 @@ self.addEventListener('fetch', (e) => {
 
 // Reminder notifications: open (or focus) the app on the reminder's screen.
 self.addEventListener('notificationclick', (e) => {
+  // Rest-timer buttons: tell the open workout page, without opening anything.
+  if (e.action === 'rest-add' || e.action === 'rest-skip') {
+    if (e.action === 'rest-skip') e.notification.close();
+    e.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => list.forEach((c) => c.postMessage({ type: 'rest', action: e.action }))),
+    );
+    return;
+  }
   e.notification.close();
   const url = new URL(`./#/${e.notification.data?.route ?? 'today'}`, self.registration.scope).href;
   e.waitUntil(

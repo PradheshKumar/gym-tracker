@@ -14,6 +14,7 @@ import { Logger } from './screens/Logger';
 import { MediaScreen } from './screens/Media';
 import { PlanScreen } from './screens/PlanEditor';
 import { Reports } from './screens/Reports';
+import { RemindersScreen } from './screens/RemindersScreen';
 import { More } from './screens/More';
 import { SettingsScreen } from './screens/Settings';
 import { Setup } from './screens/Setup';
@@ -28,7 +29,7 @@ const NAV = [
   { id: 'more', label: 'More', ico: '☰' },
 ];
 
-const MORE_ROUTES = ['reports', 'plan', 'exercises', 'media', 'insights', 'coach', 'settings', 'more'];
+const MORE_ROUTES = ['reminders', 'reports', 'plan', 'exercises', 'media', 'insights', 'coach', 'settings', 'more'];
 
 export function App() {
   const [route, go] = useHashRoute();
@@ -57,6 +58,9 @@ export function App() {
       break;
     case 'exercises':
       screen = <ExerciseLibrary go={go} />;
+      break;
+    case 'reminders':
+      screen = <RemindersScreen />;
       break;
     case 'reports':
       screen = <Reports />;

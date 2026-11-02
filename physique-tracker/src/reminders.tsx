@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { db } from './db';
 import { useDayTargets } from './hooks-food';
 import { usePlan, useToday } from './hooks';
-import { DEFAULT_REMINDERS, dueReminders, notYetNotified, type Due, type ReminderConfig } from './lib/reminders';
+import { DEFAULT_REMINDERS, customDue, dueReminders, notYetNotified, type Due, type ReminderConfig } from './lib/reminders';
 import { planFor } from './lib/planner';
 import { pushActiveHere } from './push';
 
@@ -33,6 +33,7 @@ export function useDueReminders(): Due[] | undefined {
   const plan = usePlan();
   const targets = useDayTargets(today);
   const state = useLiveQuery(async () => {
+    const custom = await db.customReminders.toArray();
     const [weigh, sets, skips, check, food, water, waist, media] = await Promise.all([
       db.weighins.get(today),
       db.sets.where('date').equals(today).count(),
@@ -54,17 +55,19 @@ export function useDueReminders(): Due[] | undefined {
       lastMeasurement: waist[waist.length - 1]?.date,
       lastPhoto: last('photo'),
       lastVideo: last('video'),
+      custom,
     };
   }, [today]);
   if (!config || !plan || !state || targets === undefined) return undefined;
   const p = planFor(plan, today);
-  return dueReminders(config, {
-    ...state,
+  const { custom, ...rest } = state;
+  return [...customDue(custom, today, minutes), ...dueReminders(config, {
+    ...rest,
     today,
     minutes,
     isTrainingDay: !!p && !p.rest,
     waterTargetMl: (targets?.waterL ?? 3) * 1000,
-  });
+  })];
 }
 
 const SENT = 'reminders.sent';
@@ -108,6 +111,11 @@ export function ReminderNotifier() {
         if (reg) await reg.showNotification(d.title, opts);
         else new Notification(d.title, opts);
         sent[d.id] = today;
+        // A one-off custom reminder is finished once delivered.
+        if (d.id.startsWith('custom-')) {
+          const r = await db.customReminders.get(d.id.slice(7));
+          if (r?.repeat === 'once') await db.customReminders.update(r.id!, { done: true });
+        }
       }
       try {
         localStorage.setItem(SENT, JSON.stringify(sent));
